@@ -29,6 +29,34 @@ BTreeIndex::BTreeIndex()
  */
 RC BTreeIndex::open(const string& indexname, char mode)
 {
+	if(pf.open(indexname, mode))
+	    return 1;
+
+	  char info[PageFile::PAGE_SIZE];
+	  // Set the rootpid and tree height vars
+	  if (pf.endPid() == 0)
+	  {
+	    // Newly created file. Initialize height and root
+	    rootPid = -1;
+	    treeHeight = 0;
+
+	    // Reserve the first page of the page file for var storage
+	    // No need to actually store variables.
+	    // This will be done when file is closed
+	    if (pf.write(0, info))
+	    {
+	       return 2;
+	    }
+	  }
+	  else
+	  {
+	    if (pf.read(0, info))
+	    {
+	      return 2;
+	    }
+	    rootPid = *((PageId *)info);
+	    treeHeight = *((int *)(info+sizeof(PageId)));
+	  }
     return 0;
 }
 
@@ -38,7 +66,79 @@ RC BTreeIndex::open(const string& indexname, char mode)
  */
 RC BTreeIndex::close()
 {
-    return 0;
+    // Store info variables
+    char info[PageFile::PAGE_SIZE];
+    *((PageId *)info) = rootPid;
+    *((int *)(info+sizeof(PageId))) = treeHeight;
+    pf.write(0,info);
+
+    // Close page file
+    return pf.close();
+}
+
+////////********************************************************************
+//este no estaba!!!!!!!!
+RC BTreeIndex::insert_helper(int key, const RecordId& rid, PageId pid, int height, int& ofKey, PageId& ofPid)
+{
+  	ofKey = -1;
+
+  	// Base case: at leaf node
+  	if (height == treeHeight)
+  	{
+    	BTLeafNode ln;
+    	ln.read(pid, pf);
+    	if (ln.insert(key, rid))
+    	{
+      	// Overflow. Create new leaf node and split.
+      	BTLeafNode newNode;
+      	if (ln.insertAndSplit(key, rid, newNode, ofKey))
+        	return 1;
+
+      	// Set new nextNode pointers
+      	ofPid = pf.endPid();
+      	newNode.setNextNodePtr(ln.getNextNodePtr());
+      	ln.setNextNodePtr(ofPid);
+
+      	if (newNode.write(ofPid, pf))
+        	return 1;
+    }
+    if (ln.write(pid, pf))
+      	return 1;
+  	}
+  	// Recursive: At non-leaf node
+  	else
+  	{
+    	BTNonLeafNode nln;
+    	int eid;
+    	PageId child;
+
+    	nln.read(pid, pf);
+    	nln.locate(key, eid);
+    	nln.readEntry(eid, child);
+    	insert_helper(key, rid, child, height+1, ofKey, ofPid);
+    	if (ofKey > 0)
+    	{
+      	// Child node overflowed. Insert (key,pid) into this node.
+      		if (nln.insert(ofKey, ofPid))
+      		{
+        		// Non-leaf node overflow. Split node between siblings.
+        		int midKey;
+        		BTNonLeafNode sibling;
+
+        		if (nln.insertAndSplit(ofKey, ofPid, sibling, midKey))
+          			return 1;
+        		ofKey = midKey;
+        		ofPid = pf.endPid();
+        		if (sibling.write(ofPid, pf))
+          			return 1;
+      			}
+      	else{
+    		ofKey = -1;
+  		}
+  		nln.write(pid, pf);
+    	}
+  	}
+  	return 0;
 }
 
 /*
@@ -49,7 +149,33 @@ RC BTreeIndex::close()
  */
 RC BTreeIndex::insert(int key, const RecordId& rid)
 {
-    return 0;
+    int ofKey;
+  	PageId ofPid;
+
+  	//If new index, simply add a root node
+  	if (treeHeight == 0)
+  	{
+    	BTLeafNode ln;
+    	ln.insert(key, rid);
+    	rootPid = pf.endPid();
+    	treeHeight = 1;
+    	ln.write(rootPid, pf);
+    	return 0;
+  	}
+
+  	if (insert_helper(key, rid, rootPid, 1, ofKey, ofPid))
+    	return 1;
+
+  	// If overflow at top level, create new root node
+  	if (ofKey > 0)
+  	{
+    	BTNonLeafNode newRoot;
+    	newRoot.initializeRoot(rootPid, ofKey, ofPid);
+    	rootPid = pf.endPid();
+    	treeHeight++;
+    	newRoot.write(rootPid, pf);
+  	}
+  	return 0;
 }
 
 /**
@@ -72,7 +198,26 @@ RC BTreeIndex::insert(int key, const RecordId& rid)
  */
 RC BTreeIndex::locate(int searchKey, IndexCursor& cursor)
 {
-    return 0;
+    PageId pid = rootPid;
+  	int i = 0;
+  	while (i < treeHeight-1)
+  	{
+    	int eid;
+    	BTNonLeafNode nln;
+
+    	nln.read(pid, pf);
+    	nln.locate(searchKey, eid);
+    	nln.readEntry(eid, pid);
+    	i++;
+  	}
+
+  	BTLeafNode ln;
+  	ln.read(pid, pf);
+ 
+  	cursor.pid = pid;
+  	ln.locate(searchKey, cursor.eid);
+
+  	return 0;
 }
 
 /*
@@ -85,5 +230,23 @@ RC BTreeIndex::locate(int searchKey, IndexCursor& cursor)
  */
 RC BTreeIndex::readForward(IndexCursor& cursor, int& key, RecordId& rid)
 {
-    return 0;
+    BTLeafNode ln;
+  	ln.read(cursor.pid, pf);
+  	ln.readEntry(cursor.eid, key, rid);
+
+  	//Check if we have a valid page
+  	if (cursor.pid <= 0 || cursor.pid >= pf.endPid())
+  	{
+    	return 1;
+  	}
+
+  	// Increment cursor
+  	cursor.eid++;
+  	if (cursor.eid >= ln.getKeyCount())
+  	{
+    	cursor.pid = ln.getNextNodePtr();
+    	cursor.eid = 0;
+  	}
+
+  	return 0;
 }
