@@ -99,7 +99,7 @@ class BTLeafNode {
     RC write(PageId pid, PageFile& pf);
 
     int getMaxKeyCount();
-    BTLeafNode();
+    //BTLeafNode();
 
   private:
     struct Entry;
