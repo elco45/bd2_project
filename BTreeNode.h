@@ -98,7 +98,11 @@ class BTLeafNode {
     */
     RC write(PageId pid, PageFile& pf);
 
+    int getMaxKeyCount();
+    BTLeafNode();
+
   private:
+    struct Entry;
    /**
     * The main memory buffer for loading the content of the disk page 
     * that contains the node.
@@ -176,12 +180,16 @@ class BTNonLeafNode {
     */
     RC write(PageId pid, PageFile& pf);
 
+    RC readEntry(int eid, PageId& pid);
+    RC locate(int searchKey, int& eid);
+    int getMaxKeyCount();
   private:
    /**
     * The main memory buffer for loading the content of the disk page 
     * that contains the node.
     */
     char buffer[PageFile::PAGE_SIZE];
+    struct Entry;
 }; 
 
 #endif /* BTREENODE_H */

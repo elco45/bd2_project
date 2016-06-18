@@ -1,6 +1,16 @@
 #include "BTreeNode.h"
-
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <iostream>
+#include <fstream>
 using namespace std;
+
+struct BTLeafNode::Entry {
+  RecordId rid;
+  int key;
+};
+
 
 /*
  * Read the content of the node from the page pid in the PageFile pf.
@@ -9,7 +19,9 @@ using namespace std;
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTLeafNode::read(PageId pid, const PageFile& pf)
-{ return 0; }
+{
+  return pf.read(pid, buffer);
+}
     
 /*
  * Write the content of the node to the page pid in the PageFile pf.
@@ -18,14 +30,31 @@ RC BTLeafNode::read(PageId pid, const PageFile& pf)
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTLeafNode::write(PageId pid, PageFile& pf)
-{ return 0; }
+{
+  return pf.write(pid,buffer);
+}
+
+int BTLeafNode::getMaxKeyCount()
+{
+  return (PageFile::PAGE_SIZE-sizeof(PageId))/(sizeof(Entry));
+}
 
 /*
  * Return the number of keys stored in the node.
  * @return the number of keys in the node
  */
 int BTLeafNode::getKeyCount()
-{ return 0; }
+{
+  int count = 0;
+  Entry* entry = (Entry *) buffer;
+  while(count < getMaxKeyCount()) {
+    if (entry->key == 0)
+      break;
+    count++;
+    entry++;
+  }
+  return count;
+}
 
 /*
  * Insert a (key, rid) pair to the node.
@@ -34,7 +63,28 @@ int BTLeafNode::getKeyCount()
  * @return 0 if successful. Return an error code if the node is full.
  */
 RC BTLeafNode::insert(int key, const RecordId& rid)
-{ return 0; }
+{
+  int insertId;
+
+  if (getKeyCount() >= getMaxKeyCount())
+    return 1;  //Node is full
+  if (locate (key, insertId))
+    insertId = getKeyCount();  //Add to end of node
+
+  Entry* insertEntry = (Entry *)buffer + insertId;
+  Entry* curEntry = (Entry *)buffer + getKeyCount();
+  // This loop shifts Entrys to the right so we can insert the new one
+  while (curEntry != insertEntry) {
+    Entry* nextEntry = curEntry - 1;
+    *curEntry = *nextEntry;
+    curEntry = nextEntry;
+  }
+
+  // Insert new tuple into correct space
+  insertEntry->key = key;
+  insertEntry->rid = rid;
+  return 0;
+}
 
 /*
  * Insert the (key, rid) pair to the node
@@ -48,21 +98,74 @@ RC BTLeafNode::insert(int key, const RecordId& rid)
  */
 RC BTLeafNode::insertAndSplit(int key, const RecordId& rid, 
                               BTLeafNode& sibling, int& siblingKey)
-{ return 0; }
+{
+  int eid; // index of where extra Entry should go
+  int keyCount = getKeyCount();
+  int siblingId = (keyCount+1)/2;
 
-/**
- * If searchKey exists in the node, set eid to the index entry
- * with searchKey and return 0. If not, set eid to the index entry
- * immediately after the largest index key that is smaller than searchKey,
- * and return the error code RC_NO_SUCH_RECORD.
- * Remember that keys inside a B+tree node are always kept sorted.
- * @param searchKey[IN] the key to search for.
- * @param eid[OUT] the index entry number with searchKey or immediately
-                   behind the largest key smaller than searchKey.
- * @return 0 if searchKey is found. Otherwise return an error code.
+  Entry swap; // Entry object which holds extra Entry
+  swap.key = key;
+  swap.rid = rid;
+
+  if (locate(swap.key, eid))
+    return 2;
+
+  //If before split, keep swapping until we get to split
+  while (eid < siblingId) {
+    Entry* cur = (Entry *)buffer + eid;
+    Entry tmp = *cur;
+    *cur = swap;
+    swap = tmp;
+    eid++;
+  }
+ 
+  //Set siblingKey if extra Entry is siblingId
+  if (eid == siblingId)
+    siblingKey = swap.key;
+  else
+    siblingKey = ((Entry *)buffer+siblingId)->key;
+
+  //Insert extra tuple into sibling
+  sibling.insert(swap.key, swap.rid);
+
+  //Insert tuples after the split
+  eid = siblingId; //eid is now just a loop index
+  while (eid < keyCount) {
+    Entry* cur = (Entry *)buffer + eid;
+
+    sibling.insert(cur->key, cur->rid);
+    cur->key = 0;
+    eid++;
+  }
+  return 0;
+}
+
+/*
+ * Find the entry whose key value is larger than or equal to searchKey
+ * and output the eid (entry number) whose key value >= searchKey.
+ * Remember that all keys inside a B+tree node should be kept sorted.
+ * @param searchKey[IN] the key to search for
+ * @param eid[OUT] the entry number that contains a key larger than or equalt to searchKey
+ * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTLeafNode::locate(int searchKey, int& eid)
-{ return 0; }
+{
+  eid = 0;
+  while (eid < getKeyCount()) {
+    Entry* entry = (Entry *)buffer + eid;
+    if (searchKey > entry->key)
+      eid++;
+    else
+      break;
+  }
+
+  // Make sure we haven't passed the last entry
+  if (eid == getKeyCount()) {
+    eid = -1;
+    return 1;
+  }
+  return 0;
+}
 
 /*
  * Read the (key, rid) pair from the eid entry.
@@ -72,22 +175,44 @@ RC BTLeafNode::locate(int searchKey, int& eid)
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTLeafNode::readEntry(int eid, int& key, RecordId& rid)
-{ return 0; }
+{
+  if (eid < 0 || eid >= getKeyCount())
+    return 1;
+
+  Entry* entry = (Entry *)buffer + eid;
+  rid = entry->rid;
+  key = entry->key;
+  return 0;
+}
 
 /*
- * Return the pid of the next slibling node.
+ * Return the pid of the next sibling node.
  * @return the PageId of the next sibling node 
  */
 PageId BTLeafNode::getNextNodePtr()
-{ return 0; }
+{
+  PageId* pid = (PageId *)(buffer+PageFile::PAGE_SIZE) - 1;
+  return *pid;
+}
 
 /*
- * Set the pid of the next slibling node.
+ * Set the pid of the next sibling node.
  * @param pid[IN] the PageId of the next sibling node 
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTLeafNode::setNextNodePtr(PageId pid)
-{ return 0; }
+{
+  PageId* ptr = (PageId *)(buffer+PageFile::PAGE_SIZE) - 1;
+  *ptr = pid;
+  return 0;
+}
+
+
+struct BTNonLeafNode::Entry
+{
+  int key;
+  PageId pid;
+};
 
 /*
  * Read the content of the node from the page pid in the PageFile pf.
@@ -96,7 +221,9 @@ RC BTLeafNode::setNextNodePtr(PageId pid)
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTNonLeafNode::read(PageId pid, const PageFile& pf)
-{ return 0; }
+{
+  return pf.read(pid, buffer);
+}
     
 /*
  * Write the content of the node to the page pid in the PageFile pf.
@@ -105,15 +232,27 @@ RC BTNonLeafNode::read(PageId pid, const PageFile& pf)
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTNonLeafNode::write(PageId pid, PageFile& pf)
-{ return 0; }
+{
+  return pf.write(pid, buffer);
+}
+
 
 /*
  * Return the number of keys stored in the node.
  * @return the number of keys in the node
  */
 int BTNonLeafNode::getKeyCount()
-{ return 0; }
-
+{
+  int count = 0;
+  Entry* entry = (Entry *) buffer;
+  while(count < getMaxKeyCount()) {
+    if (entry->key == 0)
+      break;
+    count++;
+    entry++;
+  }
+  return count;
+}
 
 /*
  * Insert a (key, pid) pair to the node.
@@ -122,7 +261,30 @@ int BTNonLeafNode::getKeyCount()
  * @return 0 if successful. Return an error code if the node is full.
  */
 RC BTNonLeafNode::insert(int key, PageId pid)
-{ return 0; }
+{
+  int insertId;
+
+  if (getKeyCount() >= getMaxKeyCount())
+    return 1;  //Node is full
+  if (locate (key, insertId))
+    insertId = 0;  //Insert at very beginning
+  else // We want to insert in the slot after the located entry
+    insertId++;
+
+  Entry* insertEntry = (Entry *)buffer + insertId;
+  Entry* curEntry = (Entry *)buffer + getKeyCount();
+  // This loop shifts Entrys to the right so we can insert the new one
+  while (curEntry != insertEntry) {
+    Entry* nextEntry = curEntry - 1;
+    *curEntry = *nextEntry;
+    curEntry = nextEntry;
+  }
+
+  // Insert new tuple into correct space
+  insertEntry->key = key;
+  insertEntry->pid = pid;
+  return 0;
+}
 
 /*
  * Insert the (key, pid) pair to the node
@@ -135,7 +297,58 @@ RC BTNonLeafNode::insert(int key, PageId pid)
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTNonLeafNode::insertAndSplit(int key, PageId pid, BTNonLeafNode& sibling, int& midKey)
-{ return 0; }
+{
+  int eid; // index of where extra Entry should go
+  int keyCount = getKeyCount();
+  int midId = keyCount/2;
+
+  Entry swap; // Entry object which holds extra Entry
+  swap.key = key;
+  swap.pid = pid;
+
+  if (locate(swap.key, eid))
+    return 2;
+  eid++;
+
+  //If before split, keep swapping until we get to split
+  while (eid < midId) {
+    Entry* cur = (Entry *)buffer + eid;
+    Entry tmp = *cur;
+    *cur = swap;
+    swap = tmp;
+    eid++;
+  }
+ 
+  //Set midId
+  if (eid != midId)
+  {
+    Entry *cur = (Entry *)buffer+midId;
+    Entry temp = *cur;
+    midKey = cur->key;
+    *cur = swap;
+    swap = temp;
+  }
+
+  midKey = swap.key;
+
+  eid = midId; //eid is now just a loop index
+  
+  // Initialize root node for sibling
+  Entry* cur = (Entry *)buffer + eid;
+  sibling.initializeRoot(swap.pid,cur->key,cur->pid);
+  cur->key = 0;
+  eid++;
+
+  //Insert tuples after the split
+  while (eid < keyCount) {
+    cur = (Entry *)buffer + eid;
+
+    sibling.insert(cur->key, cur->pid);
+    cur->key = 0;
+    eid++;
+  }
+  return 0;
+}
 
 /*
  * Given the searchKey, find the child-node pointer to follow and
@@ -144,8 +357,72 @@ RC BTNonLeafNode::insertAndSplit(int key, PageId pid, BTNonLeafNode& sibling, in
  * @param pid[OUT] the pointer to the child node to follow.
  * @return 0 if successful. Return an error code if there is an error.
  */
-RC BTNonLeafNode::locateChildPtr(int searchKey, PageId& pid)
-{ return 0; }
+RC BTNonLeafNode::locateChildPtr(int searchKey, PageId& pid){
+	int count = getKeyCount();
+	int ikey;
+	PageId lpid;
+	PageId rpid;
+	for(int i = 0; i < count; i++){
+		memcpy(&lpid,sizeof(int)+buffer+(i*(sizeof(PageId)+sizeof(int))),sizeof(PageId));
+		memcpy(&ikey,sizeof(int)+buffer+(sizeof(PageId)+i*(sizeof(PageId)+sizeof(int))),sizeof(int));
+		memcpy(&rpid,sizeof(int)+buffer+(sizeof(PageId)+sizeof(int)+i*(sizeof(PageId)+sizeof(int))),sizeof(PageId));
+		if(i == count-1 && searchKey >= ikey){	//looking at last key
+			pid = rpid;
+			return 0;
+		}
+		
+		if(searchKey < ikey){
+			pid = lpid;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+RC BTNonLeafNode::locate(int searchKey, int& eid)
+{
+  eid = getKeyCount()-1;
+  while (eid >= 0) {
+    Entry* entry = (Entry *)buffer + eid;
+    if (searchKey < entry->key)
+      eid--;
+    else
+      break;
+  }
+  if (eid == -1)
+    return 1;
+
+  return 0;
+}
+
+int BTNonLeafNode::getMaxKeyCount()
+{
+  return (PageFile::PAGE_SIZE-sizeof(PageId))/(sizeof(Entry));
+}
+/*
+ * Read the (key, pid) pair from the eid entry.
+ * @param eid[IN] the entry number to read the (key, pid) pair from
+ * @param key[OUT] the key from the entry
+ * @param pid[OUT] the PageId from the entry
+ * @return 0 if successful. Return an error code if there is an error.
+ */
+RC BTNonLeafNode::readEntry(int eid, PageId& pid)
+{
+  if (eid >= getKeyCount())
+    return 1;
+
+  // Return the pointer not associated with an Entry
+  if (eid < 0) {
+    PageId *ptr = (PageId *)(buffer+PageFile::PAGE_SIZE-sizeof(PageId));
+    pid = *ptr;
+  }
+  else {
+    Entry* entry = (Entry *)buffer + eid;
+    pid = entry->pid;
+  }
+  return 0;
+}
+
 
 /*
  * Initialize the root node with (pid1, key, pid2).
@@ -155,4 +432,22 @@ RC BTNonLeafNode::locateChildPtr(int searchKey, PageId& pid)
  * @return 0 if successful. Return an error code if there is an error.
  */
 RC BTNonLeafNode::initializeRoot(PageId pid1, int key, PageId pid2)
-{ return 0; }
+{
+  // Zero out the buffer
+  bzero(buffer, PageFile::PAGE_SIZE);
+
+  // A root entry is represented as follows:
+  //  One Entry node, consisting of a key and a pointer (pid2)
+  //  One pointer, which is stored at the end of the buffer, but
+  //  represents the pointer to nodes smaller than the key
+  //
+  Entry root;
+  root.key = key;
+  root.pid = pid2;
+
+  *((Entry *) buffer) = root;
+
+  PageId *ptr1 = (PageId *)(buffer+PageFile::PAGE_SIZE-sizeof(PageId));
+  *ptr1 = pid1;
+  return 0;
+}
