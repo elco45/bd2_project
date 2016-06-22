@@ -67,20 +67,20 @@ RC BTLeafNode::insert(int key, const RecordId& rid)
   int insertId;
 
   if (getKeyCount() >= getMaxKeyCount())
-    return 1;  //Node is full
+    return 1;  //Nodo lleno
   if (locate (key, insertId))
-    insertId = getKeyCount();  //Add to end of node
+    insertId = getKeyCount();  //Agregar al final del nodo
 
   Entry* insertEntry = (Entry *)buffer + insertId;
   Entry* curEntry = (Entry *)buffer + getKeyCount();
-  // This loop shifts Entrys to the right so we can insert the new one
+  // Mover los Entry a la derecha para poder insertar uno nuevo
   while (curEntry != insertEntry) {
     Entry* nextEntry = curEntry - 1;
     *curEntry = *nextEntry;
     curEntry = nextEntry;
   }
 
-  // Insert new tuple into correct space
+  // Insertar nueva tupla en el nodo
   insertEntry->key = key;
   insertEntry->rid = rid;
   return 0;
@@ -96,21 +96,20 @@ RC BTLeafNode::insert(int key, const RecordId& rid)
  * @param siblingKey[OUT] the first key in the sibling node after split.
  * @return 0 if successful. Return an error code if there is an error.
  */
-RC BTLeafNode::insertAndSplit(int key, const RecordId& rid, 
-                              BTLeafNode& sibling, int& siblingKey)
+RC BTLeafNode::insertAndSplit(int key, const RecordId& rid, BTLeafNode& sibling, int& siblingKey)
 {
-  int eid; // index of where extra Entry should go
+  int eid; //indice donde puede caber un nuevo Entry
   int keyCount = getKeyCount();
   int siblingId = (keyCount+1)/2;
 
-  Entry swap; // Entry object which holds extra Entry
+  Entry swap; //Entry que mantiene otra Entry
   swap.key = key;
   swap.rid = rid;
 
   if (locate(swap.key, eid))
     return 2;
 
-  //If before split, keep swapping until we get to split
+  //Mueve los nodos dentro de la Pagina hasta que llegue a la posicion correcta para promover
   while (eid < siblingId) {
     Entry* cur = (Entry *)buffer + eid;
     Entry tmp = *cur;
@@ -118,21 +117,18 @@ RC BTLeafNode::insertAndSplit(int key, const RecordId& rid,
     swap = tmp;
     eid++;
   }
- 
-  //Set siblingKey if extra Entry is siblingId
   if (eid == siblingId)
     siblingKey = swap.key;
   else
     siblingKey = ((Entry *)buffer+siblingId)->key;
 
-  //Insert extra tuple into sibling
+  //Inserta la tupla dentro de pagina
   sibling.insert(swap.key, swap.rid);
 
-  //Insert tuples after the split
-  eid = siblingId; //eid is now just a loop index
+  //Inserta tuplas despues del split
+  eid = siblingId;
   while (eid < keyCount) {
     Entry* cur = (Entry *)buffer + eid;
-
     sibling.insert(cur->key, cur->rid);
     cur->key = 0;
     eid++;
@@ -159,7 +155,7 @@ RC BTLeafNode::locate(int searchKey, int& eid)
       break;
   }
 
-  // Make sure we haven't passed the last entry
+  // Asegura que no se haya pasado de la ultima entrada
   if (eid == getKeyCount()) {
     eid = -1;
     return 1;
@@ -265,22 +261,22 @@ RC BTNonLeafNode::insert(int key, PageId pid)
   int insertId;
 
   if (getKeyCount() >= getMaxKeyCount())
-    return 1;  //Node is full
+    return 1;  //Nodo esta lleno
   if (locate (key, insertId))
-    insertId = 0;  //Insert at very beginning
-  else // We want to insert in the slot after the located entry
+    insertId = 0;  //Para insertar al principio
+  else // Para insertar en la siguiente entrada
     insertId++;
 
   Entry* insertEntry = (Entry *)buffer + insertId;
   Entry* curEntry = (Entry *)buffer + getKeyCount();
-  // This loop shifts Entrys to the right so we can insert the new one
+  // Mueve las entradas a la derecha para poder insertar uno nuevo
   while (curEntry != insertEntry) {
     Entry* nextEntry = curEntry - 1;
     *curEntry = *nextEntry;
     curEntry = nextEntry;
   }
 
-  // Insert new tuple into correct space
+  // Inserta nueva tupla 
   insertEntry->key = key;
   insertEntry->pid = pid;
   return 0;
@@ -298,11 +294,11 @@ RC BTNonLeafNode::insert(int key, PageId pid)
  */
 RC BTNonLeafNode::insertAndSplit(int key, PageId pid, BTNonLeafNode& sibling, int& midKey)
 {
-  int eid; // index of where extra Entry should go
+  int eid; //indice donde puede caber un nuevo Entry
   int keyCount = getKeyCount();
   int midId = keyCount/2;
 
-  Entry swap; // Entry object which holds extra Entry
+  Entry swap; //Entry que mantiene otra Entry
   swap.key = key;
   swap.pid = pid;
 
@@ -310,7 +306,7 @@ RC BTNonLeafNode::insertAndSplit(int key, PageId pid, BTNonLeafNode& sibling, in
     return 2;
   eid++;
 
-  //If before split, keep swapping until we get to split
+  //Mover hasta llegar a la posicion correcta para el split
   while (eid < midId) {
     Entry* cur = (Entry *)buffer + eid;
     Entry tmp = *cur;
@@ -318,8 +314,8 @@ RC BTNonLeafNode::insertAndSplit(int key, PageId pid, BTNonLeafNode& sibling, in
     swap = tmp;
     eid++;
   }
- 
-  //Set midId
+
+  //Settiar el id de la mitad de la hoja
   if (eid != midId)
   {
     Entry *cur = (Entry *)buffer+midId;
@@ -328,18 +324,16 @@ RC BTNonLeafNode::insertAndSplit(int key, PageId pid, BTNonLeafNode& sibling, in
     *cur = swap;
     swap = temp;
   }
-
   midKey = swap.key;
-
-  eid = midId; //eid is now just a loop index
+  eid = midId;
   
-  // Initialize root node for sibling
+  // Inicializar nodo raiz para convertirlo en hermano
   Entry* cur = (Entry *)buffer + eid;
   sibling.initializeRoot(swap.pid,cur->key,cur->pid);
   cur->key = 0;
   eid++;
 
-  //Insert tuples after the split
+  //Inserta tupla despues del split
   while (eid < keyCount) {
     cur = (Entry *)buffer + eid;
 
@@ -411,7 +405,7 @@ RC BTNonLeafNode::readEntry(int eid, PageId& pid)
   if (eid >= getKeyCount())
     return 1;
 
-  // Return the pointer not associated with an Entry
+  //Retorna el objeto que apunta el pid
   if (eid < 0) {
     PageId *ptr = (PageId *)(buffer+PageFile::PAGE_SIZE-sizeof(PageId));
     pid = *ptr;
@@ -433,20 +427,15 @@ RC BTNonLeafNode::readEntry(int eid, PageId& pid)
  */
 RC BTNonLeafNode::initializeRoot(PageId pid1, int key, PageId pid2)
 {
-  // Zero out the buffer
+  //Vaciar el buffer
   bzero(buffer, PageFile::PAGE_SIZE);
-
-  // A root entry is represented as follows:
-  //  One Entry node, consisting of a key and a pointer (pid2)
-  //  One pointer, which is stored at the end of the buffer, but
-  //  represents the pointer to nodes smaller than the key
-  //
+  //Un nodo consiste de una llave y un puntero
+  //Un puntero apunta a una hoja con claves menores y otra a los claves mayores
   Entry root;
   root.key = key;
   root.pid = pid2;
 
   *((Entry *) buffer) = root;
-
   PageId *ptr1 = (PageId *)(buffer+PageFile::PAGE_SIZE-sizeof(PageId));
   *ptr1 = pid1;
   return 0;

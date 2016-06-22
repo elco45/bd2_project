@@ -37,16 +37,11 @@ RC BTreeIndex::open(const string& indexname, char mode)
     return 1;
 
   char info[PageFile::PAGE_SIZE];
-  // Set the rootpid and tree height vars
+  // Settiar el id de la pagina raiz y la altura del arbol
   if (pf.endPid() == 0)
   {
-    // Newly created file. Initialize height and root
     rootPid = -1;
     treeHeight = 0;
-
-    // Reserve the first page of the page file for var storage
-    // No need to actually store variables.
-    // This will be done when file is closed
     if (pf.write(0, info))
     {
        return 2;
@@ -71,15 +66,78 @@ RC BTreeIndex::open(const string& indexname, char mode)
  */
 RC BTreeIndex::close()
 {
-    // Store info variables
     char info[PageFile::PAGE_SIZE];
     *((PageId *)info) = rootPid;
     *((int *)(info+sizeof(PageId))) = treeHeight;
     pf.write(0,info);
 
-    // Close page file
     return pf.close();
 }
+
+RC BTreeIndex::insert_helper(int key, const RecordId& rid, PageId pid, int height, int& ofKey, PageId& ofPid)
+{
+  ofKey = -1;
+
+  // Caso base, cuando esta en nodo hoja
+  if (height == treeHeight)
+  {
+    BTLeafNode ln;
+    ln.read(pid, pf);
+    if (ln.insert(key, rid))
+    {
+      // Overflow, se crea un nuevo nodo hoja y se hace split
+      BTLeafNode newNode;
+      if (ln.insertAndSplit(key, rid, newNode, ofKey))
+        return 1;
+
+      // Settea el puntero del nuevo nodo
+      ofPid = pf.endPid();
+      newNode.setNextNodePtr(ln.getNextNodePtr());
+      ln.setNextNodePtr(ofPid);
+
+      if (newNode.write(ofPid, pf))
+        return 1;
+    }
+    if (ln.write(pid, pf))
+      return 1;
+  }
+  // NonLeaf node
+  else
+  {
+    BTNonLeafNode nln;
+    int eid;
+    PageId child;
+
+    nln.read(pid, pf);
+    nln.locate(key, eid);
+    nln.readEntry(eid, child);
+    insert_helper(key, rid, child, height+1, ofKey, ofPid);
+    if (ofKey > 0)
+    {
+      // Overflow en nodo hijo, se inserta una nueva tupla en el nodo actual
+      if (nln.insert(ofKey, ofPid))
+      {
+        // Divide los hermanos del nodo
+        int midKey;
+        BTNonLeafNode sibling;
+
+        if (nln.insertAndSplit(ofKey, ofPid, sibling, midKey))
+          return 1;
+        ofKey = midKey;
+        ofPid = pf.endPid();
+        if (sibling.write(ofPid, pf))
+          return 1;
+      }
+      else
+      {
+        ofKey = -1;
+      }
+      nln.write(pid, pf);
+    }
+  }
+  return 0;
+}
+
 
 
 /*
@@ -93,7 +151,7 @@ RC BTreeIndex::insert(int key, const RecordId& rid)
   int ofKey;
   PageId ofPid;
 
-  //If new index, simply add a root node
+  //Para la primera vez, crear nodo raiz
   if (treeHeight == 0)
   {
     BTLeafNode ln;
@@ -104,9 +162,10 @@ RC BTreeIndex::insert(int key, const RecordId& rid)
     return 0;
   }
 
- 
+  if (insert_helper(key, rid, rootPid, 1, ofKey, ofPid))
+    return 1;
 
-  // If overflow at top level, create new root node
+  // Si hay overflow en el padre, se crea un nuevo nodo raiz
   if (ofKey > 0)
   {
     BTNonLeafNode newRoot;
@@ -175,13 +234,13 @@ RC BTreeIndex::readForward(IndexCursor& cursor, int& key, RecordId& rid)
   ln.read(cursor.pid, pf);
   ln.readEntry(cursor.eid, key, rid);
 
-  //Check if we have a valid page
+  //Verifica si hay paginas validas
   if (cursor.pid <= 0 || cursor.pid >= pf.endPid())
   {
     return 1;
   }
 
-  // Increment cursor
+  // Incrementa el cursor
   cursor.eid++;
   if (cursor.eid >= ln.getKeyCount())
   {

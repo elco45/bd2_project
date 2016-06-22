@@ -133,42 +133,36 @@ RC SqlEngine::select(int attr, const string& table, const vector<SelCond>& cond)
 
 RC SqlEngine::load(const string& table, const string& loadfile, bool index)
 {
-  RecordFile rf;   // RecordFile containing the table
-  RecordId   rid;  // record cursor for table scanning
-  BTreeIndex bti;  // BTree Index for inserting indices
-  ifstream ifs;    // Input file stream for the load file
-
-  int    key;     
-  string value;
-  string line;
+  RecordFile rf;   // Contiene la tabla
+  RecordId   rid;  // Cursor para buscar dentro de la tabla
+  BTreeIndex bti;  // Indice para busqueda con indice
+  ifstream ifs;
 
   // open the table file
   rf.open(table + ".tbl", 'w');
 
-  // open an index file
   if (index) {
     bti.open(table + ".idx", 'w');
   }
 
-  // open the load file
   ifs.open(loadfile.c_str(), ifstream::in);
 
+  int    key;     
+  string value,line;
   // read load file line by line and insert, parse and insert tuples into record file and index
+
   getline(ifs, line);
   for (unsigned lineNum = 1; ifs.good(); lineNum++) {
     if (parseLoadLine(line, key, value)) {
-      fprintf(stderr, "Warning: Could not parse line %u from file %s\n", lineNum, loadfile.c_str());
       goto next_line;
     }
 
     if (rf.append(key, value, rid)) {
-      fprintf(stderr, "Warning: Could not insert tuple with key %i into %s RecordFile\n", key, table.c_str());
       goto next_line;
     }
 
     if (index) {
       if (bti.insert(key, rid)) {
-        fprintf(stderr, "Warning: Could not insert key %i into index\n", key);
         goto next_line;
       }
     }
@@ -176,7 +170,6 @@ RC SqlEngine::load(const string& table, const string& loadfile, bool index)
     getline(ifs, line);
   }
 
-  // close files and streams and return
   exit_load:
   rf.close();
   ifs.close();
