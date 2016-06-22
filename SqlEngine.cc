@@ -133,12 +133,11 @@ RC SqlEngine::select(int attr, const string& table, const vector<SelCond>& cond)
 
 RC SqlEngine::load(const string& table, const string& loadfile, bool index)
 {
-  RecordFile rf;   // Contiene la tabla
-  RecordId   rid;  // Cursor para buscar dentro de la tabla
-  BTreeIndex bti;  // Indice para busqueda con indice
   ifstream ifs;
+  RecordId   rid;  // Cursor para buscar dentro de la tabla
+  RecordFile rf;   // Contiene la tabla
+  BTreeIndex bti;  // Indice para busqueda con indice
 
-  // open the table file
   rf.open(table + ".tbl", 'w');
 
   if (index) {
@@ -149,8 +148,6 @@ RC SqlEngine::load(const string& table, const string& loadfile, bool index)
 
   int    key;     
   string value,line;
-  // read load file line by line and insert, parse and insert tuples into record file and index
-
   getline(ifs, line);
   for (unsigned lineNum = 1; ifs.good(); lineNum++) {
     if (parseLoadLine(line, key, value)) {
